@@ -1,6 +1,8 @@
-streamlit>=1.40
+streamlit>=1.49
 duckdb>=1.1
 pandas>=2.2
 pyarrow>=17
-altair>=5
+numpy>=1.26
+plotly>=5.18
 huggingface_hub>=0.25
+openpyxl>=3.1
