@@ -21,7 +21,7 @@ st.set_page_config(page_title="Comtrade 무역 대시보드", layout="wide")
 @st.cache_resource
 def connect():
     con = duckdb.connect()
-    con.execute(f"SET memory_limit = '{os.environ.get('DASHBOARD_DUCKDB_MEMORY', '4GB')}'")
+    con.execute(f"SET memory_limit = '{os.environ.get('DASHBOARD_DUCKDB_MEMORY', '1GB')}'")
     token = os.environ.get("HF_TOKEN")
     if token:
         con.execute("CREATE SECRET hf (TYPE huggingface, TOKEN ?)", [token])
@@ -118,7 +118,7 @@ with st.sidebar:
                                   value=(max(years_available[0], years_available[-1] - 9), years_available[-1]))
         years = [y for y in years_available if lo <= y <= hi]
 
-    level = st.radio("HS 단위", [2, 4, 6], index=[2, 4, 6].index(int(os.environ.get("DASHBOARD_DEFAULT_LEVEL", 6))), horizontal=True, format_func=lambda v: f"{v}단위")
+    level = st.radio("HS 단위", [2, 4, 6], index=[2, 4, 6].index(int(os.environ.get("DASHBOARD_DEFAULT_LEVEL", 4))), horizontal=True, format_func=lambda v: f"{v}단위")
     level_hs = hs[hs.level == level]
     labels = dict(zip(level_hs.code, level_hs.label))
     hs_sel = st.multiselect(f"품목 (HS {level}단위)", list(labels), format_func=lambda c: labels[c],
