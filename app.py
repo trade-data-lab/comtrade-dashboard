@@ -1,4 +1,4 @@
-"""UN Comtrade HS 6단위 양자 무역 대시보드 (Hugging Face 집계본을 DuckDB로 원격 조회)."""
+"""UN Comtrade HS 6단위 양자 무역 대시보드 (Hugging Face 집계본을 받아 DuckDB로 조회)."""
 
 import os
 
@@ -6,10 +6,10 @@ import altair as alt
 import duckdb
 import pandas as pd
 import streamlit as st
-from huggingface_hub import hf_hub_download
+from huggingface_hub import HfApi, hf_hub_download
+from huggingface_hub.errors import HfHubHTTPError
 
 AGG_REPO = "trade-data-lab/comtrade-hs6-agg"
-AGG = f"hf://datasets/{AGG_REPO}"
 WORLD = 0
 FLOWS = {"수출": "X", "수입": "M"}
 METRICS = {"금액 (USD)": "value", "순중량 (kg)": "net_wgt", "수량": "qty"}
@@ -18,40 +18,47 @@ VIEWS = ["연도별 추이", "품목별 순위", "상대국별 순위"]
 st.set_page_config(page_title="Comtrade 무역 대시보드", layout="wide")
 
 
+def hf_token():
+    """Streamlit Cloud Secrets 또는 환경 변수의 HF_TOKEN. 없으면 hf auth login으로 저장한 토큰을 쓴다."""
+    try:
+        return st.secrets.get("HF_TOKEN") or os.environ.get("HF_TOKEN")
+    except FileNotFoundError:
+        return os.environ.get("HF_TOKEN")
+
+
+def download(path):
+    """파일을 처음 한 번만 통째로 받아 디스크에 두고 경로를 돌려준다. 파일이 갱신되면 새로 받는다.
+
+    원격으로 조금씩 읽으면 요청이 많아 느리다.
+    """
+    local = hf_hub_download(AGG_REPO, path, repo_type="dataset", token=hf_token(),
+                            cache_dir=os.environ.get("DASHBOARD_CACHE_DIR"))
+    return local.replace("\\", "/")
+
+
 @st.cache_resource
 def connect():
     con = duckdb.connect()
     con.execute(f"SET memory_limit = '{os.environ.get('DASHBOARD_DUCKDB_MEMORY', '1GB')}'")
-    token = os.environ.get("HF_TOKEN")
-    if token:
-        con.execute("CREATE SECRET hf (TYPE huggingface, TOKEN ?)", [token])
-    else:
-        con.execute("CREATE SECRET hf (TYPE huggingface, PROVIDER credential_chain)")
     return con
 
 
 @st.cache_data(ttl=86400, show_spinner="코드표 불러오는 중...")
 def reference():
-    con = connect()
-    reporters = con.sql(f"SELECT code, name FROM read_csv('{AGG}/reference/reporters.csv') WHERE NOT is_group").df()
-    partners = con.sql(f"SELECT code, name FROM read_csv('{AGG}/reference/partners.csv')").df()
-    hs = con.sql(f"SELECT code, label, level FROM read_csv('{AGG}/reference/hs.csv', types={{'code': 'VARCHAR'}})").df()
-    units = con.sql(f"SELECT qtyCode AS code, qtyAbbr AS unit FROM read_csv('{AGG}/reference/quantity_units.csv')").df()
-    coverage = con.sql(f"SELECT * FROM '{AGG}/coverage/*.parquet' ORDER BY year, flow").df()
+    reporters = pd.read_csv(download("reference/reporters.csv"))
+    reporters = reporters.loc[~reporters.is_group, ["code", "name"]]
+    partners = pd.read_csv(download("reference/partners.csv"))[["code", "name"]]
+    hs = pd.read_csv(download("reference/hs.csv"), dtype={"code": str})[["code", "label", "level"]]
+    units = pd.read_csv(download("reference/quantity_units.csv")).rename(columns={"qtyCode": "code", "qtyAbbr": "unit"})
+    files = [f for f in HfApi(token=hf_token()).list_repo_files(AGG_REPO, repo_type="dataset")
+             if f.startswith("coverage/")]
+    coverage = connect().execute(
+        f"SELECT * FROM read_parquet({[download(f) for f in files]!r}) ORDER BY year, flow").df()
     return reporters, partners, hs, units, coverage
 
 
 def local_files(level, years):
-    """연도 파일을 처음 한 번만 통째로 받아 디스크에 두고 이후에는 로컬에서 읽는다.
-
-    원격으로 조금씩 읽으면 요청이 많아 느리다. 파일이 갱신되면 hf_hub_download가 새로 받는다.
-    """
-    paths = []
-    for y in years:
-        path = hf_hub_download(AGG_REPO, f"hs{level}/year={y}.parquet", repo_type="dataset",
-                               cache_dir=os.environ.get("DASHBOARD_CACHE_DIR"))
-        paths.append(path.replace("\\", "/"))
-    return paths
+    return [download(f"hs{level}/year={y}.parquet") for y in years]
 
 
 @st.cache_data(ttl=86400, show_spinner="데이터를 읽는 중... (처음 고른 연도·단위는 내려받느라 오래 걸릴 수 있습니다)")
@@ -88,7 +95,17 @@ def country_options(df, world_label):
     return order, names
 
 
-reporters, partners, hs, units, coverage = reference()
+try:
+    reporters, partners, hs, units, coverage = reference()
+except HfHubHTTPError as e:
+    status = getattr(e.response, "status_code", None)
+    st.error(
+        "Hugging Face 데이터에 접근하지 못했습니다"
+        + (f" (HTTP {status})." if status else ".")
+        + " 앱 설정의 Secrets에 `HF_TOKEN = \"hf_...\"`가 있는지, 그 토큰에 "
+        "`trade-data-lab/comtrade-hs6-agg` 읽기 권한이 있는지 확인해 주세요."
+    )
+    st.stop()
 unit_names = dict(zip(units.code, units.unit))
 years_available = sorted(coverage.year.unique())
 
