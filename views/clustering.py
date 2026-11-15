@@ -54,6 +54,7 @@ def render():
             "군 1이 가장 큰 국가들입니다. 0이거나 값이 없는 국가는 제외했습니다.")
 
     # ---- 산점도
+    ui.chart_title(f"국가별 {ui.FLOW_KO[flow]} 금액 × 순중량", "로그 축 · 점을 가리키면 값이 보입니다")
     fig = go.Figure()
     label_top = set(d.nlargest(10, "value").reporter_code)
     for cl in sorted(d.cluster.unique()):
@@ -66,9 +67,8 @@ def render():
             customdata=np.stack([s.name, ui.short_series(s.value, " $"), ui.short_series(s.net_wgt, " kg")], axis=1),
             hovertemplate="<b>%{customdata[0]}</b><br>금액 %{customdata[1]}<br>순중량 %{customdata[2]}<extra>군 " + str(cl) + "</extra>",
         ))
-    fig.update_layout(title=f"국가별 {ui.FLOW_KO[flow]} 금액 × 순중량 (로그 축)", xaxis=dict(type="log", title="금액 (USD)", showgrid=True),
-                      yaxis=dict(type="log", title="순중량 (kg)"), legend=dict(orientation="h"))
-    ui.plot(fig, height=480)
+    fig.update_layout(xaxis=dict(type="log", title="금액 (USD)", showgrid=True), yaxis=dict(type="log", title="순중량 (kg)"))
+    ui.plot(fig, height=500)
 
     # ---- 군 요약: 구분 기준, 평균·중위
     summary = d.groupby("cluster").agg(

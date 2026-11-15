@@ -65,12 +65,35 @@ def available_years(table):
     return sorted(int(f[len(prefix):-8]) for f in repo_files() if f.startswith(prefix))
 
 
+# 보고국 연도 합계에서 순중량/금액이 이 값(kg/USD)을 넘으면 단위 오류로 보고 순중량을 결측 처리한다.
+# 금액 10억$ 이상 보고의 99% 지점이 약 11 kg/USD다. 예: Eswatini 2016 수입 660만 kg/USD, Mexico 수입 약 100 kg/USD.
+WEIGHT_MAX_KG_PER_USD = 30
+
+
 @st.cache_resource
 def connect():
     con = duckdb.connect()
     con.execute(f"SET memory_limit = '{os.environ.get('DASHBOARD_DUCKDB_MEMORY', '1GB')}'")
     con.execute("SET threads = 2")
+    files = dash_files("country", available_years("country"))
+    con.execute(f"""
+        CREATE TABLE wgt_bad AS
+        SELECT year, reporter_code, flow, net_wgt / value AS kg_per_usd
+        FROM read_parquet({files!r})
+        WHERE net_wgt / nullif(coalesce(value, value_bilateral), 0) > {WEIGHT_MAX_KG_PER_USD}
+    """)
     return con
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def weight_outliers():
+    """순중량을 제외한 (연도, 보고국, 흐름) 목록."""
+    return query("SELECT year, reporter_code, flow, kg_per_usd FROM wgt_bad ORDER BY kg_per_usd DESC")
+
+
+# 각 조회에서 순중량 이상치를 결측으로 바꾸는 조각
+WGT = "CASE WHEN b.year IS NULL THEN t.net_wgt END"
+BAD_JOIN = "LEFT JOIN wgt_bad b USING (year, reporter_code, flow)"
 
 
 def query(sql, params=None):
@@ -120,8 +143,9 @@ def country_year(years):
     """연도 × 보고국 × 흐름. value는 대세계(partner 0) 합계, 없으면 양자 합계로 대신한다."""
     return query(f"""
         SELECT year, reporter_code, flow,
-               coalesce(value, value_bilateral) AS value, net_wgt, partners, items
-        FROM {_src('country', years)}
+               coalesce(value, value_bilateral) AS value, {WGT} AS net_wgt, partners, items,
+               b.year IS NOT NULL AS wgt_excluded
+        FROM {_src('country', years)} t {BAD_JOIN}
     """)
 
 
@@ -129,8 +153,8 @@ def country_year(years):
 def pairs(years):
     """선택 기간 합계: 보고국 × 상대국 × 흐름."""
     return query(f"""
-        SELECT reporter_code, partner_code, flow, sum(value) AS value, sum(net_wgt) AS net_wgt
-        FROM {_src('pairs', years)} GROUP BY ALL
+        SELECT reporter_code, partner_code, flow, sum(value) AS value, sum({WGT}) AS net_wgt
+        FROM {_src('pairs', years)} t {BAD_JOIN} GROUP BY ALL
     """)
 
 
@@ -141,9 +165,9 @@ def hs4_by_group(years, flow, groups):
     con = connect()
     con.register("grp_map", mapping)
     df = con.execute(f"""
-        SELECT m.grp, h.hs4, sum(h.value) AS value, sum(h.net_wgt) AS net_wgt
-        FROM {_src('country_hs4', years)} h JOIN grp_map m USING (reporter_code)
-        WHERE h.flow = ? GROUP BY ALL
+        SELECT m.grp, t.hs4, sum(t.value) AS value, sum({WGT}) AS net_wgt
+        FROM {_src('country_hs4', years)} t JOIN grp_map m USING (reporter_code) {BAD_JOIN}
+        WHERE t.flow = ? GROUP BY ALL
     """, [flow]).df()
     con.unregister("grp_map")
     return df
@@ -152,8 +176,8 @@ def hs4_by_group(years, flow, groups):
 @st.cache_data(ttl=86400, show_spinner="세계 품목 합계를 읽는 중...")
 def world_hs(years, flow, level=2):
     return query(f"""
-        SELECT left(hs4, {level}) AS hs, sum(value) AS value, sum(net_wgt) AS net_wgt
-        FROM {_src('country_hs4', years)} WHERE flow = ? GROUP BY ALL ORDER BY value DESC
+        SELECT left(hs4, {level}) AS hs, sum(value) AS value, sum({WGT}) AS net_wgt
+        FROM {_src('country_hs4', years)} t {BAD_JOIN} WHERE t.flow = ? GROUP BY ALL ORDER BY value DESC
     """, [flow])
 
 
@@ -161,8 +185,8 @@ def world_hs(years, flow, level=2):
 def pair_items(years, reporter, partner, flow):
     """연도별 상위 20개 HS4를 선택 기간에 걸쳐 합친 값."""
     return query(f"""
-        SELECT hs4, sum(value) AS value, sum(net_wgt) AS net_wgt, count(*) AS years_in_top
-        FROM {_src('pair_hs4_top', years)}
+        SELECT hs4, sum(value) AS value, sum({WGT}) AS net_wgt, count(*) AS years_in_top
+        FROM {_src('pair_hs4_top', years)} t {BAD_JOIN}
         WHERE reporter_code = ? AND partner_code = ? AND flow = ?
         GROUP BY hs4 ORDER BY value DESC
     """, [reporter, partner, flow])
@@ -172,6 +196,6 @@ def pair_items(years, reporter, partner, flow):
 def industry(years):
     """선택 기간 합계: 보고국 × 흐름 × ISIC 4자리."""
     return query(f"""
-        SELECT reporter_code, flow, isic, sum(value) AS value, sum(net_wgt) AS net_wgt
-        FROM {_src('industry', years)} GROUP BY ALL
+        SELECT reporter_code, flow, isic, sum(value) AS value, sum({WGT}) AS net_wgt
+        FROM {_src('industry', years)} t {BAD_JOIN} GROUP BY ALL
     """)

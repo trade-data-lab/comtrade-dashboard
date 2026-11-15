@@ -1,8 +1,11 @@
 """Continents: 대륙별 추이, 지도, 대륙 간 흐름."""
 
+import json
+
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+import pydeck as pdk
 import streamlit as st
 
 from core import data, ui
@@ -26,7 +29,10 @@ def render():
 
     # ---- 장기 추이
     trend = d.groupby(["year", "continent"])[m].sum().reset_index()
+    ui.chart_title(f"대륙별 {ui.FLOW_KO[flow]} {ui.METRIC_KO[m]} 추이", unit)
     fig = go.Figure()
+    ymax = trend[m].max() if len(trend) else 1
+    labelled = []
     for c in MAIN:
         s = trend[trend.continent == c]
         if s.empty:
@@ -36,43 +42,41 @@ def render():
             line=dict(color=ui.CONTINENT_COLOR[c], width=2), marker=dict(size=6),
             customdata=ui.short_series(s[m]), hovertemplate="%{customdata}<extra>" + ui.CONTINENT_KO[c] + "</extra>",
         ))
-        fig.add_annotation(x=s.year.iloc[-1], y=s[m].iloc[-1], text=ui.CONTINENT_KO[c], showarrow=False,
-                           xanchor="left", xshift=6, font=dict(color=ui.CONTINENT_COLOR[c], size=11))
-    fig.update_layout(title=f"대륙별 {ui.FLOW_KO[flow]} {ui.METRIC_KO[m]} 추이", hovermode="x unified",
-                      yaxis=dict(tickformat="~s", rangemode="tozero"), margin=dict(r=70),
-                      xaxis=dict(dtick=1 if len(f.years) <= 12 else 2))
-    ui.plot(fig, height=400)
+        last = s[m].iloc[-1]
+        # 끝점 이름표는 서로 겹치지 않는 계열에만 (나머지는 범례로)
+        if all(abs(last - other) > 0.05 * ymax for other in labelled):
+            labelled.append(last)
+            fig.add_annotation(x=s.year.iloc[-1], y=last, text=ui.CONTINENT_KO[c], showarrow=False,
+                               xanchor="left", xshift=6, font=dict(color=ui.CONTINENT_COLOR[c], size=11))
+    fig.update_layout(hovermode="x unified", yaxis=dict(tickformat="~s", rangemode="tozero"), margin=dict(r=80),
+                      xaxis=dict(dtick=1 if len(f.years) <= 12 else 2, range=[min(f.years) - 0.4, max(f.years) + 0.4]))
+    ui.plot(fig, height=420)
     wide = trend.pivot(index="year", columns="continent", values=m).rename(columns=ui.CONTINENT_KO).reset_index()
     ui.register("대륙별 추이", wide)
 
-    # ---- 지도 (대륙별 합계로 색) + 클릭 → 품목 순위
+    # ---- 지도 (대륙별 합계로 색) + 나라 클릭 → 그 대륙의 품목 순위
     st.subheader("지도")
     cont_total = d.groupby("continent")[m].sum()
-    countries = ref["countries"]
-    geo = countries[(countries.continent.isin(MAIN)) & (countries.iso3.str.len() == 3) & ~countries.is_group].copy()
-    geo["total"] = geo.continent.map(cont_total).fillna(0)
-    geo["hover"] = [f"<b>{n}</b><br>{ui.CONTINENT_KO[c]} {ui.FLOW_KO[flow]} 합계: {ui.short(t, ' ' + unit)}"
-                    for n, c, t in zip(geo.name, geo.continent, geo.total)]
-    fig = go.Figure(go.Choropleth(
-        locations=geo.iso3, z=geo.total, locationmode="ISO-3", customdata=geo.hover,
-        colorscale=[[i / (len(ui.SEQUENTIAL) - 1), c] for i, c in enumerate(ui.SEQUENTIAL)],
-        marker=dict(line=dict(color="#fcfcfb", width=0.5)), hovertemplate="%{customdata}<extra></extra>",
-        colorbar=dict(title=dict(text=unit, side="right"), thickness=10, len=0.6, tickformat="~s", outlinewidth=0),
-    ))
-    fig.update_geos(projection_type="natural earth", showframe=False, showcoastlines=False,
-                    showland=True, landcolor="#efefec", showcountries=False, bgcolor="rgba(0,0,0,0)",
-                    lataxis_range=[-58, 84])
-    fig.update_layout(title=f"대륙별 {ui.FLOW_KO[flow]} {ui.METRIC_KO[m]} (대륙을 클릭하면 아래에 품목 순위)",
-                      margin=dict(l=0, r=0, t=36, b=0), dragmode=False)
-    event = ui.plot(fig, key="cont_map", select=True, height=440)
-    point = ui.selected_point(event)
-    if point is not None and "point_index" in point:
-        st.session_state["cont_pick"] = geo.iloc[point["point_index"]].continent
-
-    options = [c for c in MAIN if c in cont_total.index]
-    default = st.session_state.get("cont_pick", options[0] if options else None)
-    pick = st.selectbox("대륙 (지도 클릭 또는 선택)", options, index=options.index(default) if default in options else 0,
-                        format_func=lambda c: ui.CONTINENT_KO[c], key="cont_select")
+    marks = [c for c in MAIN if c in cont_total.index]
+    if st.session_state.get("cont_select") not in marks:
+        st.session_state["cont_select"] = marks[0]
+    ui.chart_title(f"대륙별 {ui.FLOW_KO[flow]} {ui.METRIC_KO[m]}", "나라를 클릭하면 그 대륙의 품목 순위가 아래에 나옵니다 · 마우스를 올리면 값")
+    event = st.pydeck_chart(_continent_map(ref, cont_total, unit, flow), on_select="rerun",
+                            selection_mode="single-object", key="cont_map", height=440, width="stretch")
+    picked = None
+    try:
+        objects = event.selection.objects.get("countries", [])
+        picked = objects[0] if objects else None
+    except AttributeError:
+        pass
+    if picked:
+        props = picked.get("properties", picked)
+        if props.get("continent") in marks:
+            # 선택 상자는 자기 상태를 기억하므로, 지도 클릭은 상자의 상태를 직접 바꾼다
+            st.session_state["cont_select"] = props["continent"]
+    st.markdown(f'<div class="section-note">색이 진할수록 {ui.FLOW_KO[flow]} {ui.METRIC_KO[m]}이 큰 대륙 · '
+                + " · ".join(f"{ui.CONTINENT_KO[k]} {ui.short(cont_total[k])}" for k in marks) + "</div>", unsafe_allow_html=True)
+    pick = st.selectbox("대륙 (지도 클릭 또는 선택)", marks, format_func=lambda c: ui.CONTINENT_KO[c], key="cont_select")
     items = data.hs4_by_group(f.years, flow, {code: cont for code, cont in ref["continent"].items() if cont == pick})
     items = items.sort_values(m, ascending=False)
     items["label"] = items.hs4.map(ref["hs_label"]).fillna(items.hs4).str.slice(0, 48)
@@ -115,10 +119,59 @@ def render():
             colorscale=[[i / (len(ui.SEQUENTIAL) - 1), c] for i, c in enumerate(ui.SEQUENTIAL)],
             showscale=False, hovertemplate="%{y} → %{x}<br>%{text}<extra></extra>", xgap=2, ygap=2,
         ))
-        fig.update_layout(title="출발 대륙(행) → 도착 대륙(열)", xaxis=dict(side="top"), yaxis=dict(autorange="reversed"),
-                          margin=dict(l=8, r=8, t=70, b=8))
+        fig.update_layout(title="출발 대륙(행) → 도착 대륙(열)", xaxis=dict(tickangle=0, tickfont=dict(size=11)),
+                          yaxis=dict(autorange="reversed", tickfont=dict(size=11)), margin=dict(l=8, r=8, t=44, b=8))
         ui.plot(fig, height=460)
     ui.register("대륙 간 흐름", flows.assign(origin=flows.origin.map(ui.CONTINENT_KO), dest=flows.dest.map(ui.CONTINENT_KO)))
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def _world():
+    with open(data.download("reference/world_110m.geojson"), encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def _ramp(values):
+    """값 크기에 따라 순차 파랑 램프의 색을 고른다 (0 → 가장 연한 색)."""
+    vmax = max(float(values.max()), 1e-9)
+    steps = len(ui.SEQUENTIAL) - 1
+    return [ui.SEQUENTIAL[int(round(steps * (0 if pd.isna(v) else v) / vmax))] for v in values]
+
+
+def _rgb(hex_color, alpha=255):
+    h = hex_color.lstrip("#")
+    return [int(h[i:i + 2], 16) for i in (0, 2, 4)] + [alpha]
+
+
+def _continent_map(ref, cont_total, unit, flow):
+    iso_cont = {}
+    for code, iso in ref["iso3"].items():
+        cont = ref["continent"].get(code)
+        if cont in MAIN and isinstance(iso, str) and len(iso) == 3:
+            iso_cont[iso] = cont
+    color = dict(zip(cont_total.index, _ramp(cont_total)))
+    features = []
+    for f in _world()["features"]:
+        iso = f["properties"]["iso3"]
+        cont = iso_cont.get(iso)
+        features.append({"type": "Feature", "geometry": f["geometry"], "properties": {
+            "name": f["properties"]["name"], "continent": cont or "",
+            "continent_ko": ui.CONTINENT_KO.get(cont, "기타·미상"),
+            "total_text": ui.short(cont_total.get(cont, 0), " " + unit) if cont else "–",
+            "fill": _rgb(color.get(cont, "#e8e8e4")) if cont else _rgb("#e8e8e4"),
+        }})
+    layer = pdk.Layer(
+        "GeoJsonLayer", {"type": "FeatureCollection", "features": features}, id="countries",
+        pickable=True, stroked=True, filled=True, get_fill_color="properties.fill",
+        get_line_color=[252, 252, 251, 255], line_width_min_pixels=0.6,
+        auto_highlight=True, highlight_color=[11, 11, 11, 40],
+    )
+    view = pdk.ViewState(latitude=18, longitude=12, zoom=0.85, min_zoom=0.5, max_zoom=4)
+    tooltip = {"html": "<b>{name}</b><br/>{continent_ko} " + ui.FLOW_KO[flow] + " 합계 {total_text}<br/>"
+                       "<span style='color:#898781'>클릭하면 이 대륙의 품목 순위</span>",
+               "style": {"backgroundColor": "#ffffff", "color": "#0b0b0b", "fontSize": "13px",
+                         "border": "1px solid #e1e0d9", "borderRadius": "8px", "padding": "8px 10px"}}
+    return pdk.Deck(layers=[layer], initial_view_state=view, map_style=None, map_provider=None, tooltip=tooltip)
 
 
 def _curve(a, b, n=30, bend=0.18):

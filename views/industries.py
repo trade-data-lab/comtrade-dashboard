@@ -24,7 +24,7 @@ def render():
     ranked = ranked.sort_values(m, ascending=False).reset_index(drop=True)
     ranked["share"] = ranked[m] / ranked[m].sum() * 100
     ranked.insert(0, "rank", ranked.index + 1)
-    ranked["name"] = ranked.code.map(lambda c: names.get(c, "미분류" if c.startswith("99") else c))
+    ranked["name"] = ranked.code.map(lambda c: "미분류 (HS→ISIC 대응 없음)" if c.startswith("99") else names.get(c, c))
     ranked["label"] = ranked.code + " " + ranked.name.str.slice(0, 44)
     unmapped = ranked.loc[ranked.code.str.startswith("99"), "share"].sum()
     ui.note(f"{f.label} · {ui.METRIC_KO[m]} · ISIC Rev.3 기준 (WITS HS→ISIC 대응표). "

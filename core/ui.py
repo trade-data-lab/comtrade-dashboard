@@ -9,7 +9,7 @@ import plotly.io as pio
 import streamlit as st
 import streamlit.components.v1 as components
 
-from .data import CONTINENTS, Filters
+from .data import CONTINENTS, WEIGHT_MAX_KG_PER_USD, Filters
 
 # 검증된 범주형 팔레트 (고정 순서, 순환하지 않음)
 PALETTE = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"]
@@ -23,7 +23,8 @@ CONTINENT_COLOR = {c: PALETTE[i] for i, c in enumerate(CONTINENTS[:6])} | {"Unsp
 METRIC_KO = {"value": "금액", "net_wgt": "순중량"}
 METRIC_UNIT = {"value": "USD", "net_wgt": "kg"}
 
-PLOT_CONFIG = {"displaylogo": False, "modeBarButtonsToRemove": ["lasso2d", "select2d", "autoScale2d"],
+PLOT_CONFIG = {"displaylogo": False, "scrollZoom": False,  # 페이지 스크롤이 지도를 확대·축소하지 않게
+               "modeBarButtonsToRemove": ["lasso2d", "select2d", "autoScale2d"],
                "toImageButtonOptions": {"format": "png", "scale": 2}}
 
 
@@ -32,9 +33,9 @@ def _template():
     t.layout = go.Layout(
         font=dict(family='system-ui, -apple-system, "Segoe UI", "Malgun Gothic", sans-serif', size=13, color=INK2),
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-        colorway=PALETTE, margin=dict(l=48, r=16, t=44, b=8),
+        colorway=PALETTE, margin=dict(l=48, r=16, t=16, b=56),
         hoverlabel=dict(bgcolor="#ffffff", bordercolor=GRID, font=dict(color=INK, size=13)),
-        legend=dict(orientation="h", yanchor="bottom", y=1.0, x=1, xanchor="right", title=None, font=dict(color=INK2)),
+        legend=dict(orientation="h", yanchor="top", y=-0.14, x=0, xanchor="left", title=None, font=dict(color=INK2)),
         xaxis=dict(gridcolor=GRID, linecolor=AXIS, zerolinecolor=GRID, tickfont=dict(color=MUTED), showgrid=False,
                    automargin=True),
         yaxis=dict(gridcolor=GRID, linecolor=AXIS, zerolinecolor=GRID, tickfont=dict(color=MUTED), gridwidth=1,
@@ -81,6 +82,7 @@ def inject_css():
     st.markdown("""
     <style>
       .block-container { padding-top: 1.2rem; padding-bottom: 4rem; max-width: 1400px; }
+      @media (min-width: 1100px) { .block-container { padding-right: 170px; } }
       h1, h2, h3 { letter-spacing: -0.01em; }
       .kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin: 4px 0 14px; }
       .kpi { background: #ffffff; border: 1px solid rgba(11,11,11,0.08); border-radius: 14px; padding: 14px 16px;
@@ -90,6 +92,8 @@ def inject_css():
       .kpi .delta { font-size: 12px; margin-top: 6px; color: #52514e; }
       .kpi .delta.up { color: #006300; } .kpi .delta.down { color: #d03b3b; }
       .section-note { color: #52514e; font-size: 13px; margin: -6px 0 10px; }
+      .chart-title { font-size: 15px; font-weight: 600; color: #0b0b0b; margin: 6px 0 -4px; }
+      .chart-title .chart-sub { font-weight: 400; color: #898781; font-size: 12px; margin-left: 8px; }
       .st-key-floating_tools { position: fixed; right: 18px; top: 42%; z-index: 999; width: 128px;
              background: rgba(255,255,255,0.86); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
              border: 1px solid rgba(11,11,11,0.08); border-radius: 16px; padding: 10px 10px 6px;
@@ -145,18 +149,33 @@ def plot(fig, key=None, select=False, height=None):
     return st.plotly_chart(fig, **kwargs)
 
 
-def hbar(df, x, y, text=None, color=PALETTE[0], hover=None, title=None, height=None):
-    """순위형 가로 막대: 한 계열, 한 색. 큰 값이 위."""
+def clip(text, n=36):
+    text = str(text)
+    return text if len(text) <= n else text[: n - 1].rstrip() + "…"
+
+
+def chart_title(text, sub=None):
+    """범례가 있는 차트는 Plotly 제목 대신 이 제목을 쓴다 (범례와 겹치지 않게)."""
+    sub_html = f'<span class="chart-sub">{sub}</span>' if sub else ""
+    st.markdown(f'<div class="chart-title">{text}{sub_html}</div>', unsafe_allow_html=True)
+
+
+def hbar(df, x, y, text=None, color=PALETTE[0], hover=None, title=None, height=None, label_width=36):
+    """순위형 가로 막대: 한 계열, 한 색. 큰 값이 위. 긴 이름은 줄이고 전체 이름은 툴팁에 둔다."""
     d = df.iloc[::-1]
+    full = d[y].astype(str).tolist()
+    labels = [clip(s, label_width) for s in full]
+    detail = d[hover].tolist() if hover else [f"{v:,.0f}" for v in d[x]]
     fig = go.Figure(go.Bar(
-        x=d[x], y=d[y], orientation="h", marker=dict(color=color, line=dict(width=0)),
+        x=d[x], y=labels, orientation="h", marker=dict(color=color, line=dict(width=0)),
         text=d[text] if text else None, textposition="outside", cliponaxis=False,
-        customdata=d[hover] if hover else None,
-        hovertemplate="<b>%{y}</b><br>%{customdata}<extra></extra>" if hover else "<b>%{y}</b><br>%{x:,.0f}<extra></extra>",
+        customdata=list(zip(full, detail)),
+        hovertemplate="<b>%{customdata[0]}</b><br>%{customdata[1]}<extra></extra>",
         marker_cornerradius=4,
     ))
     fig.update_layout(title=title, bargap=0.32, height=height or max(260, 24 * len(d) + 70),
-                      xaxis=dict(showgrid=True, tickformat="~s", title=None), yaxis=dict(title=None, automargin=True),
+                      xaxis=dict(showgrid=True, tickformat="~s", title=None),
+                      yaxis=dict(title=None, automargin=True, tickfont=dict(size=12)),
                       margin=dict(l=8, r=64, t=44 if title else 8, b=8), showlegend=False)
     return fig
 
@@ -168,7 +187,9 @@ def table(df, key=None, select=False, height=None, formats=None):
         if pd.api.types.is_float_dtype(df[col]) or pd.api.types.is_integer_dtype(df[col]):
             fmt = (formats or {}).get(col, "%,.0f")
             config[col] = st.column_config.NumberColumn(col, format=fmt)
-    kwargs = dict(hide_index=True, width="stretch", column_config=config, key=key, height=height)
+    kwargs = dict(hide_index=True, width="stretch", column_config=config, key=key)
+    if height:
+        kwargs["height"] = height
     if select:
         kwargs.update(on_select="rerun", selection_mode="single-row")
     return st.dataframe(df, **kwargs)
@@ -234,7 +255,7 @@ def sticky_box():
 
 # ---------- 사이드바 전역 필터 ----------
 
-def sidebar_filters(years_available):
+def sidebar_filters(years_available, outliers=None):
     with st.sidebar:
         st.markdown("### 조건")
         whole = st.toggle("전기간", value=False, help=f"{years_available[0]}~{years_available[-1]}년 전체")
@@ -248,4 +269,10 @@ def sidebar_filters(years_available):
                           horizontal=True)
         st.caption("금액은 각 보고국이 보고한 USD(수출 FOB·수입 CIF), 순중량은 kg입니다. "
                    "World는 그해 보고한 국가만의 합입니다.")
+        if outliers is not None and len(outliers):
+            with st.expander(f"순중량 제외 보고 {len(outliers)}건"):
+                st.caption(f"순중량이 금액의 {int(WEIGHT_MAX_KG_PER_USD)} kg/USD를 넘는 보고는 단위 오류로 보고 "
+                           "순중량 계산에서만 뺐습니다. 금액은 그대로 씁니다.")
+                st.dataframe(outliers, hide_index=True, width="stretch",
+                             column_config={"kg_per_usd": st.column_config.NumberColumn("kg/USD", format="%,.0f")})
     return Filters(years=years, whole_period=whole, metric=metric)

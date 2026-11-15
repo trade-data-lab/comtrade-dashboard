@@ -8,7 +8,7 @@ import streamlit as st
 from huggingface_hub.errors import HfHubHTTPError
 
 from core import data, ui
-from views import clustering, continents, industries, overall, pairing
+from views import clustering, continents, explorer, industries, overall, pairing
 
 st.set_page_config(page_title="Global Trade Dashboard", page_icon="🌐", layout="wide",
                    initial_sidebar_state="expanded")
@@ -29,7 +29,10 @@ if not years_available:
              "comtrade-pipeline의 **Rebuild aggregates** 워크플로를 `scope=dash`로 실행해 주세요.")
     st.stop()
 
-filters = ui.sidebar_filters(years_available)
+outliers = data.weight_outliers()
+outliers["reporter"] = outliers.reporter_code.map(ref["name"])
+outliers["flow"] = outliers.flow.map(ui.FLOW_KO)
+filters = ui.sidebar_filters(years_available, outliers[["year", "reporter", "flow", "kg_per_usd"]])
 st.session_state["filters"] = filters
 st.session_state["ref"] = ref
 
@@ -39,6 +42,7 @@ pages = [
     st.Page(clustering.render, title="Clustering", icon=":material/bubble_chart:", url_path="clustering"),
     st.Page(pairing.render, title="Pairing", icon=":material/swap_horiz:", url_path="pairing"),
     st.Page(industries.render, title="Industries", icon=":material/factory:", url_path="industries"),
+    st.Page(explorer.render, title="Explorer", icon=":material/search:", url_path="explorer"),
 ]
 page = st.navigation(pages, position="top")
 

@@ -46,6 +46,7 @@ def render():
 
     c1, c2 = st.columns([3, 2])
     with c1:
+        ui.chart_title(f"연도별 세계 {ui.METRIC_KO[m]} 합계", unit)
         fig = go.Figure()
         for flow in ("X", "M"):
             s = piv[flow]
@@ -54,14 +55,15 @@ def render():
                 line=dict(color=ui.FLOW_COLOR[flow], width=2), marker=dict(size=7),
                 customdata=ui.short_series(s.values), hovertemplate="%{customdata}<extra>" + ui.FLOW_KO[flow] + "</extra>",
             ))
-        fig.update_layout(title=f"연도별 세계 {ui.METRIC_KO[m]} 합계", hovermode="x unified",
-                          yaxis=dict(tickformat="~s", rangemode="tozero"), xaxis=dict(dtick=1 if len(piv) <= 12 else 2))
+        fig.update_layout(hovermode="x unified", yaxis=dict(tickformat="~s", rangemode="tozero"),
+                          xaxis=dict(dtick=1 if len(piv) <= 12 else 2, range=[piv.index.min() - 0.4, piv.index.max() + 0.4]))
         ui.plot(fig, height=360)
     with c2:
+        ui.chart_title("연도별 보고국 수", "수출 기준")
         fig = go.Figure(go.Bar(x=rep.index, y=rep["X"], marker=dict(color=ui.PALETTE[0], cornerradius=4),
                                hovertemplate="%{y}개국<extra></extra>"))
-        fig.update_layout(title="연도별 보고국 수 (수출 기준)", bargap=0.35,
-                          yaxis=dict(rangemode="tozero"), xaxis=dict(dtick=1 if len(rep) <= 12 else 2))
+        fig.update_layout(bargap=0.35, yaxis=dict(rangemode="tozero"), xaxis=dict(dtick=1 if len(rep) <= 12 else 2),
+                          margin=dict(b=8))
         ui.plot(fig, height=360)
     ui.note("최근 연도는 아직 보고하지 않은 국가가 많아 합계가 작게 나옵니다. 보고국 수와 함께 해석하세요.")
     ui.register("연도별 합계", yearly.assign(flow=yearly.flow.map(ui.FLOW_KO)))
