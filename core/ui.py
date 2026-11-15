@@ -100,9 +100,11 @@ def inject_css():
              box-shadow: 0 8px 28px rgba(11,11,11,0.10); }
       .st-key-floating_tools .stDownloadButton button, .st-key-floating_tools .stButton button { width: 100%; border-radius: 10px; }
       .st-key-floating_tools p { font-size: 11px; color: #898781; text-align: center; margin: 0 0 6px; }
-      .st-key-digest_box { position: sticky; top: 3.2rem; z-index: 50; background: #fcfcfb;
-             border: 1px solid rgba(11,11,11,0.08); border-radius: 14px; padding: 10px 14px 4px; margin-bottom: 14px;
-             box-shadow: 0 6px 18px rgba(11,11,11,0.06); }
+      /* 고정 박스: Streamlit은 요소를 감싸는 래퍼 높이만큼만 sticky가 움직이므로 래퍼 자체를 고정한다 */
+      [data-testid="stLayoutWrapper"]:has(> .st-key-digest_box) { position: sticky; top: 3.2rem; z-index: 50;
+             background: #fcfcfb; padding-top: 4px; }
+      .st-key-digest_box { background: #fcfcfb; border: 1px solid rgba(11,11,11,0.08); border-radius: 14px;
+             padding: 10px 14px 4px; margin-bottom: 14px; box-shadow: 0 6px 18px rgba(11,11,11,0.06); }
       .st-key-digest_box .kpi-grid { margin: 0 0 6px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
       .st-key-digest_box .kpi { padding: 8px 12px; box-shadow: none; }
       .st-key-digest_box .kpi .value { font-size: 18px; }
